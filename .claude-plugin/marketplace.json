@@ -1,0 +1,22 @@
+{
+  "name": "apple-health-plugins",
+  "owner": {
+    "name": "loki"
+  },
+  "metadata": {
+    "description": "Evidence-based Apple Health data analysis plugin for Claude Code",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "apple-health-analysis",
+      "source": "./",
+      "description": "Evidence-based Apple Health data analysis with ETL pipeline, tier-based indicators, and research-backed risk positioning",
+      "version": "1.0.0",
+      "license": "MIT",
+      "keywords": ["apple-health", "health-data", "etl", "evidence-based", "apple-watch"],
+      "category": "data-analysis",
+      "tags": ["health", "apple-watch", "healthkit", "analytics"]
+    }
+  ]
+}

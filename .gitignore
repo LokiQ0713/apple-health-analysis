@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# User health data (private, never commit)
+data/csv/
+data/raw/
+data/derived/
