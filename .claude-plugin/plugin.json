@@ -4,9 +4,9 @@
   "description": "Evidence-based Apple Health data analysis with ETL pipeline, tier-based indicators, and research-backed risk positioning",
   "author": {
     "name": "loki",
-    "url": "https://github.com/loki"
+    "url": "https://github.com/LokiQ0713"
   },
-  "repository": "https://github.com/loki/apple-health-analysis",
+  "repository": "https://github.com/LokiQ0713/apple-health-analysis",
   "license": "MIT",
   "keywords": [
     "apple-health",
