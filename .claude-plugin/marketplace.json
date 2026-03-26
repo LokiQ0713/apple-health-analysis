@@ -10,10 +10,7 @@
   "plugins": [
     {
       "name": "apple-health-analysis",
-      "source": {
-        "source": "github",
-        "repo": "LokiQ0713/apple-health-analysis"
-      },
+      "source": "./plugins/apple-health-analysis",
       "description": "Evidence-based Apple Health data analysis with ETL pipeline, tier-based indicators, and research-backed risk positioning",
       "version": "1.0.0",
       "license": "MIT",
