@@ -504,7 +504,7 @@ def build_daily_summary(csv_dir: Path) -> pd.DataFrame | None:
     wo = load_csv(csv_dir, "workouts.csv")
     if wo is not None:
         wo["start_date"] = pd.to_datetime(wo["start_date"], utc=True)
-        wo["wo_date"] = wo["start_date"].dt.tz_convert("Asia/Shanghai").dt.date
+        wo["wo_date"] = wo["start_date"].dt.tz_convert(LOCAL_TZ).dt.date
         wo["wo_date"] = pd.to_datetime(wo["wo_date"])
         wo["duration_min"] = pd.to_numeric(wo["duration_min"], errors="coerce")
         wo["energy_kcal"] = pd.to_numeric(wo["energy_kcal"], errors="coerce")
@@ -545,8 +545,8 @@ def build_nightly_sleep(csv_dir: Path) -> pd.DataFrame | None:
     df["end_date"] = pd.to_datetime(df["end_date"], utc=True)
 
     # 转为本地时间
-    df["start_local"] = df["date"].dt.tz_convert("Asia/Shanghai")
-    df["end_local"] = df["end_date"].dt.tz_convert("Asia/Shanghai")
+    df["start_local"] = df["date"].dt.tz_convert(LOCAL_TZ)
+    df["end_local"] = df["end_date"].dt.tz_convert(LOCAL_TZ)
 
     # 映射 sleep stage
     if "sleep_stage" in df.columns:
@@ -598,10 +598,10 @@ def build_nightly_sleep(csv_dir: Path) -> pd.DataFrame | None:
             # 如果没有有效的 sleep 数据，跳过
             continue
 
-        # 百分比 (基于 total_sleep)
-        deep_pct = deep_h / total_sleep * 100 if total_sleep > 0 else np.nan
-        core_pct = core_h / total_sleep * 100 if total_sleep > 0 else np.nan
-        rem_pct = rem_h / total_sleep * 100 if total_sleep > 0 else np.nan
+        # 百分比 (基于 total_sleep, cap at 100)
+        deep_pct = min(deep_h / total_sleep * 100, 100.0)
+        core_pct = min(core_h / total_sleep * 100, 100.0)
+        rem_pct = min(rem_h / total_sleep * 100, 100.0)
 
         # 睡眠效率
         raw_efficiency = total_sleep / time_in_bed_hours if time_in_bed_hours > 0 else np.nan
@@ -625,7 +625,11 @@ def build_nightly_sleep(csv_dir: Path) -> pd.DataFrame | None:
         fragmentation_index = awake_count / total_sleep if total_sleep > 0 else np.nan
 
         # 数据来源
-        source = group["source"].mode().iloc[0] if "source" in group.columns and not group["source"].empty else ""
+        if "source" in group.columns:
+            mode_result = group["source"].dropna().mode()
+            source = mode_result.iloc[0] if not mode_result.empty else ""
+        else:
+            source = ""
 
         results.append({
             "night_date": night,
@@ -699,15 +703,19 @@ def build_weekly_summary(daily: pd.DataFrame | None, sleep: pd.DataFrame | None)
         agg_dict["rings_closed_avg"] = ("rings_closed", "mean")
 
     if not agg_dict:
-        print("  跳过: 没有可聚合的列")
+        logging.info("  跳过: 没有可聚合的列")
         return None
 
     weekly = df.groupby("week_start").agg(**agg_dict).reset_index()
 
     # sedentary_days & active_days
     if "steps_total" in df.columns:
-        sed = df.groupby("week_start")["steps_total"].apply(lambda x: (x < 3000).sum()).rename("sedentary_days")
-        act = df.groupby("week_start")["steps_total"].apply(lambda x: (x >= 8000).sum()).rename("active_days")
+        sed = df.groupby("week_start")["steps_total"].apply(
+            lambda x: (x < SEDENTARY_STEP_THRESHOLD).sum()
+        ).rename("sedentary_days")
+        act = df.groupby("week_start")["steps_total"].apply(
+            lambda x: (x >= ACTIVE_STEP_THRESHOLD).sum()
+        ).rename("active_days")
         weekly = weekly.merge(sed, on="week_start", how="left")
         weekly = weekly.merge(act, on="week_start", how="left")
 
@@ -747,10 +755,10 @@ def build_monthly_summary(
     daily: pd.DataFrame | None, sleep: pd.DataFrame | None
 ) -> pd.DataFrame | None:
     """按自然月聚合。"""
-    print("\n[4/11] 构建 monthly_summary.csv ...")
+    logging.info("[4/11] 构建 monthly_summary.csv ...")
 
     if daily is None or daily.empty:
-        print("  跳过: daily_summary 不可用")
+        logging.info("  跳过: daily_summary 不可用")
         return None
 
     df = daily.copy()
@@ -779,15 +787,19 @@ def build_monthly_summary(
         agg_dict["rings_closed_avg"] = ("rings_closed", "mean")
 
     if not agg_dict:
-        print("  跳过: 没有可聚合的列")
+        logging.info("  跳过: 没有可聚合的列")
         return None
 
     monthly = df.groupby("month").agg(**agg_dict).reset_index()
 
     # sedentary_days & active_days
     if "steps_total" in df.columns:
-        sed = df.groupby("month")["steps_total"].apply(lambda x: (x < 3000).sum()).rename("sedentary_days")
-        act = df.groupby("month")["steps_total"].apply(lambda x: (x >= 8000).sum()).rename("active_days")
+        sed = df.groupby("month")["steps_total"].apply(
+            lambda x: (x < SEDENTARY_STEP_THRESHOLD).sum()
+        ).rename("sedentary_days")
+        act = df.groupby("month")["steps_total"].apply(
+            lambda x: (x >= ACTIVE_STEP_THRESHOLD).sum()
+        ).rename("active_days")
         monthly = monthly.merge(sed, on="month", how="left")
         monthly = monthly.merge(act, on="month", how="left")
 
@@ -888,16 +900,16 @@ def build_monthly_summary(
 
 def build_hr_hourly(csv_dir: Path) -> pd.DataFrame | None:
     """心率按小时聚合。"""
-    print("\n[5/11] 构建 hr_hourly.csv ...")
+    logging.info("[5/11] 构建 hr_hourly.csv ...")
 
     df = load_csv(csv_dir, "heart_rate.csv")
     if df is None:
-        print("  跳过: heart_rate.csv 不存在")
+        logging.info("  跳过: heart_rate.csv 不存在")
         return None
 
     df = safe_float(df)
     df["date"] = pd.to_datetime(df["date"], utc=True)
-    df["local_dt"] = df["date"].dt.tz_convert("Asia/Shanghai")
+    df["local_dt"] = df["date"].dt.tz_convert(LOCAL_TZ)
     df["date_only"] = df["local_dt"].dt.date
     df["hour"] = df["local_dt"].dt.hour
 
@@ -920,11 +932,11 @@ def build_hr_hourly(csv_dir: Path) -> pd.DataFrame | None:
 
 def build_hr_zones_daily(csv_dir: Path, max_hr: int) -> pd.DataFrame | None:
     """每日心率区间分布。"""
-    print("\n[6/11] 构建 hr_zones_daily.csv ...")
+    logging.info("[6/11] 构建 hr_zones_daily.csv ...")
 
     df = load_csv(csv_dir, "heart_rate.csv")
     if df is None:
-        print("  跳过: heart_rate.csv 不存在")
+        logging.info("  跳过: heart_rate.csv 不存在")
         return None
 
     df = safe_float(df)
@@ -937,39 +949,27 @@ def build_hr_zones_daily(csv_dir: Path, max_hr: int) -> pd.DataFrame | None:
     z4_floor = max_hr * 0.80
     z5_floor = max_hr * 0.90
 
-    def assign_zone(hr):
-        if pd.isna(hr):
-            return np.nan
-        if hr < z1_floor:
-            return 0
-        elif hr < z2_floor:
-            return 1
-        elif hr < z3_floor:
-            return 2
-        elif hr < z4_floor:
-            return 3
-        elif hr < z5_floor:
-            return 4
-        else:
-            return 5
+    # 向量化心率区间分配 (pd.cut 替代逐行 apply)
+    bins = [-np.inf, z1_floor, z2_floor, z3_floor, z4_floor, z5_floor, np.inf]
+    labels = [0, 1, 2, 3, 4, 5]
+    df["zone"] = pd.cut(df["value"], bins=bins, labels=labels, right=False).astype("Int64")
 
-    df["zone"] = df["value"].apply(assign_zone)
-
-    results = []
-    for dt, group in df.groupby("date_only"):
-        total = len(group)
-        row = {"date": dt}
-        for z in range(6):
-            cnt = (group["zone"] == z).sum()
-            row[f"zone{z}_count"] = cnt
-            row[f"zone{z}_pct"] = cnt / total * 100 if total > 0 else 0
-        results.append(row)
-
-    zones = pd.DataFrame(results)
+    # 向量化聚合 (crosstab 替代逐行循环)
+    zone_counts = df.groupby(["date_only", "zone"]).size().unstack(fill_value=0)
+    # 确保所有区间列都存在
+    for z in range(6):
+        if z not in zone_counts.columns:
+            zone_counts[z] = 0
+    zone_counts = zone_counts[sorted(zone_counts.columns)]
+    zone_counts.columns = [f"zone{z}_count" for z in range(6)]
+    totals = zone_counts.sum(axis=1)
+    zone_pcts = zone_counts.div(totals, axis=0) * 100
+    zone_pcts.columns = [f"zone{z}_pct" for z in range(6)]
+    zones = zone_counts.join(zone_pcts).reset_index().rename(columns={"date_only": "date"})
     zones = zones.sort_values("date").reset_index(drop=True)
 
-    print(f"  最大心率: {max_hr}, 区间边界: Z1>{z1_floor:.0f}, Z2>{z2_floor:.0f}, "
-          f"Z3>{z3_floor:.0f}, Z4>{z4_floor:.0f}, Z5>{z5_floor:.0f}")
+    logging.info("  最大心率: %d, 区间边界: Z1>%.0f, Z2>%.0f, Z3>%.0f, Z4>%.0f, Z5>%.0f",
+                 max_hr, z1_floor, z2_floor, z3_floor, z4_floor, z5_floor)
 
     return zones
 
@@ -981,22 +981,24 @@ def build_hr_zones_daily(csv_dir: Path, max_hr: int) -> pd.DataFrame | None:
 
 def build_workout_enriched(csv_dir: Path, max_hr: int) -> pd.DataFrame | None:
     """运动记录增强版。"""
-    print("\n[7/11] 构建 workout_enriched.csv ...")
+    logging.info("[7/11] 构建 workout_enriched.csv ...")
 
     df = load_csv(csv_dir, "workouts.csv")
     if df is None:
-        print("  跳过: workouts.csv 不存在")
+        logging.info("  跳过: workouts.csv 不存在")
         return None
 
     df["start_date"] = pd.to_datetime(df["start_date"], utc=True)
     df["end_date"] = pd.to_datetime(df["end_date"], utc=True)
-    df["start_local"] = df["start_date"].dt.tz_convert("Asia/Shanghai")
+    df["start_local"] = df["start_date"].dt.tz_convert(LOCAL_TZ)
     df["duration_min"] = pd.to_numeric(df["duration_min"], errors="coerce")
     df["distance_km"] = pd.to_numeric(df["distance_km"], errors="coerce")
     df["energy_kcal"] = pd.to_numeric(df["energy_kcal"], errors="coerce")
-    df["hr_avg"] = pd.to_numeric(df.get("hr_avg", pd.Series(dtype=float)), errors="coerce")
-    df["hr_min"] = pd.to_numeric(df.get("hr_min", pd.Series(dtype=float)), errors="coerce")
-    df["hr_max"] = pd.to_numeric(df.get("hr_max", pd.Series(dtype=float)), errors="coerce")
+    for col in ["hr_avg", "hr_min", "hr_max"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            df[col] = np.nan
 
     # 时间特征
     df["weekday"] = df["start_local"].dt.weekday
@@ -1018,16 +1020,9 @@ def build_workout_enriched(csv_dir: Path, max_hr: int) -> pd.DataFrame | None:
         if pd.notna(rhr_median):
             rhr_estimate = rhr_median
 
-    # TRIMP
-    def calc_trimp(row):
-        if pd.isna(row["hr_avg"]) or pd.isna(row["duration_min"]):
-            return np.nan
-        hr_fraction = (row["hr_avg"] - rhr_estimate) / (max_hr - rhr_estimate)
-        if hr_fraction < 0:
-            hr_fraction = 0
-        return row["duration_min"] * hr_fraction
-
-    df["trimp"] = df.apply(calc_trimp, axis=1)
+    # TRIMP (向量化)
+    hr_fraction = ((df["hr_avg"] - rhr_estimate) / (max_hr - rhr_estimate)).clip(lower=0)
+    df["trimp"] = df["duration_min"] * hr_fraction
 
     # kcal/min
     df["kcal_per_min"] = np.where(
@@ -1064,7 +1059,7 @@ def build_workout_enriched(csv_dir: Path, max_hr: int) -> pd.DataFrame | None:
 
 def build_body_composition(csv_dir: Path) -> pd.DataFrame | None:
     """身体成分时间序列。"""
-    print("\n[8/11] 构建 body_composition.csv ...")
+    logging.info("[8/11] 构建 body_composition.csv ...")
 
     parts = []
 
@@ -1081,7 +1076,7 @@ def build_body_composition(csv_dir: Path) -> pd.DataFrame | None:
             parts.append(agg)
 
     if not parts:
-        print("  跳过: 没有找到 body_mass/bmi/body_fat CSV")
+        logging.info("  跳过: 没有找到 body_mass/bmi/body_fat CSV")
         return None
 
     body = pd.concat(parts, axis=1)
@@ -1107,7 +1102,7 @@ def build_body_composition(csv_dir: Path) -> pd.DataFrame | None:
 
 def build_data_quality(csv_dir: Path) -> pd.DataFrame:
     """数据质量报告。"""
-    print("\n[9/11] 构建 data_quality.csv ...")
+    logging.info("[9/11] 构建 data_quality.csv ...")
 
     csv_files = sorted(Path(csv_dir).glob("*.csv"))
     results = []
@@ -1116,7 +1111,8 @@ def build_data_quality(csv_dir: Path) -> pd.DataFrame:
         name = csv_path.stem
         try:
             df = pd.read_csv(csv_path)
-        except Exception:
+        except (pd.errors.ParserError, pd.errors.EmptyDataError, OSError) as exc:
+            logging.warning("data_quality: 无法读取 %s: %s", csv_path.name, exc)
             continue
 
         if df.empty:
@@ -1150,8 +1146,8 @@ def build_data_quality(csv_dir: Path) -> pd.DataFrame:
                     days_with_data = day_series.nunique()
                     total_calendar_days = (dates_valid.max() - dates_valid.min()).days + 1
                     coverage_pct = days_with_data / total_calendar_days * 100 if total_calendar_days > 0 else 0
-            except Exception:
-                pass
+            except (ValueError, TypeError) as exc:
+                logging.warning("data_quality: 日期解析失败 %s: %s", name, exc)
 
         # null value
         value_col = "value" if "value" in df.columns else None
@@ -1168,11 +1164,13 @@ def build_data_quality(csv_dir: Path) -> pd.DataFrame:
                 vc = df["source"].value_counts(normalize=True)
                 dist = {str(k): round(v * 100, 1) for k, v in vc.items()}
                 source_dist = json.dumps(dist, ensure_ascii=False)
-            except Exception:
-                pass
+            except (ValueError, TypeError) as exc:
+                logging.warning("data_quality: source 分布计算失败 %s: %s", name, exc)
 
-        # tier
-        if coverage_pct >= 80:
+        # tier (N/A for files without date column)
+        if date_col is None or date_range_start is None:
+            tier = "N/A"
+        elif coverage_pct >= 80:
             tier = "A"
         elif coverage_pct >= 50:
             tier = "B"
@@ -1205,58 +1203,53 @@ def build_data_quality(csv_dir: Path) -> pd.DataFrame:
 
 def build_wearing_gaps(csv_dir: Path) -> pd.DataFrame | None:
     """佩戴间隙检测。"""
-    print("\n[10/11] 构建 wearing_gaps.csv ...")
+    logging.info("[10/11] 构建 wearing_gaps.csv ...")
 
     df = load_csv(csv_dir, "heart_rate.csv")
     if df is None:
-        print("  跳过: heart_rate.csv 不存在")
+        logging.info("  跳过: heart_rate.csv 不存在")
         return None
 
     df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.sort_values("date").reset_index(drop=True)
 
-    # 计算相邻记录之间的间隔
+    # 计算相邻记录之间的间隔 (向量化)
     df["next_date"] = df["date"].shift(-1)
     df["gap_seconds"] = (df["next_date"] - df["date"]).dt.total_seconds()
 
-    results = []
-    for _, row in df.iterrows():
-        gap_sec = row["gap_seconds"]
-        if pd.isna(gap_sec):
-            continue
+    # 过滤有效间隔
+    gap_df = df[df["gap_seconds"].notna()].copy()
+    gap_df["gap_hours"] = gap_df["gap_seconds"] / 3600
 
-        gap_hours = gap_sec / 3600
+    # 只保留 >= 2h 的间隔
+    gap_df = gap_df[gap_df["gap_hours"] >= 2].copy()
 
-        gap_start = row["date"]
-        gap_end = row["next_date"]
-        gap_start_local = gap_start.tz_convert("Asia/Shanghai")
-        gap_end_local = gap_end.tz_convert("Asia/Shanghai")
-        start_hour = gap_start_local.hour
-
-        # 判断 gap 类型
-        is_daytime = 8 <= start_hour <= 22
-
-        if gap_hours >= 4:
-            gap_type = "definite"
-        elif gap_hours >= 2 and is_daytime:
-            gap_type = "daytime"
-        elif gap_hours >= 2 and not is_daytime:
-            gap_type = "nighttime"
-        else:
-            continue  # 间隔 < 2h，不记录
-
-        results.append({
-            "gap_start": gap_start_local.strftime("%Y-%m-%d %H:%M"),
-            "gap_end": gap_end_local.strftime("%Y-%m-%d %H:%M"),
-            "gap_hours": gap_hours,
-            "gap_type": gap_type,
-        })
-
-    if not results:
-        print("  没有检测到佩戴间隙")
+    if gap_df.empty:
+        logging.info("  没有检测到佩戴间隙")
         return pd.DataFrame(columns=["gap_start", "gap_end", "gap_hours", "gap_type"])
 
-    gaps = pd.DataFrame(results)
+    gap_df["gap_start_local"] = gap_df["date"].dt.tz_convert(LOCAL_TZ)
+    gap_df["gap_end_local"] = gap_df["next_date"].dt.tz_convert(LOCAL_TZ)
+    gap_df["start_hour"] = gap_df["gap_start_local"].dt.hour
+    gap_df["is_daytime"] = gap_df["start_hour"].between(8, 22)
+
+    # 分类 gap 类型
+    definite = gap_df["gap_hours"] >= 4
+    daytime = ~definite & gap_df["is_daytime"]
+    nighttime = ~definite & ~gap_df["is_daytime"]
+    gap_df["gap_type"] = np.select(
+        [definite, daytime, nighttime],
+        ["definite", "daytime", "nighttime"],
+        default="unknown",
+    )
+
+    # 格式化输出
+    gaps = pd.DataFrame({
+        "gap_start": gap_df["gap_start_local"].dt.strftime("%Y-%m-%d %H:%M"),
+        "gap_end": gap_df["gap_end_local"].dt.strftime("%Y-%m-%d %H:%M"),
+        "gap_hours": gap_df["gap_hours"].values,
+        "gap_type": gap_df["gap_type"].values,
+    })
     gaps = gaps.sort_values("gap_start").reset_index(drop=True)
 
     return gaps
@@ -1271,14 +1264,14 @@ def build_sleep_steps_correlation(
     daily: pd.DataFrame | None, sleep: pd.DataFrame | None
 ) -> pd.DataFrame | None:
     """睡眠-活动关联表。"""
-    print("\n[11/11] 构建 sleep_steps_correlation.csv ...")
+    logging.info("[11/11] 构建 sleep_steps_correlation.csv ...")
 
     if daily is None or sleep is None:
-        print("  跳过: daily_summary 或 nightly_sleep 不可用")
+        logging.info("  跳过: daily_summary 或 nightly_sleep 不可用")
         return None
 
     if daily.empty or sleep.empty:
-        print("  跳过: 数据为空")
+        logging.info("  跳过: 数据为空")
         return None
 
     # 准备 daily 数据
@@ -1351,28 +1344,28 @@ def build_sleep_steps_correlation(
 
 def main():
     if len(sys.argv) != 3:
-        print(f"用法: python3 {sys.argv[0]} <csv_dir> <output_dir>")
+        logging.error("用法: python3 %s <csv_dir> <output_dir>", sys.argv[0])
         sys.exit(1)
 
     csv_dir = Path(sys.argv[1])
     out_dir = Path(sys.argv[2])
 
     if not csv_dir.exists():
-        print(f"错误: CSV 目录不存在: {csv_dir}")
+        logging.error("错误: CSV 目录不存在: %s", csv_dir)
         sys.exit(1)
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"输入目录: {csv_dir}")
-    print(f"输出目录: {out_dir}")
-    print(f"CSV 文件数: {len(list(csv_dir.glob('*.csv')))}")
+    logging.info("输入目录: %s", csv_dir)
+    logging.info("输出目录: %s", out_dir)
+    logging.info("CSV 文件数: %d", len(list(csv_dir.glob("*.csv"))))
 
     # 读取 me.json
     me = load_me_json(csv_dir)
     max_hr = calc_max_hr(me)
     bday = me.get("HKCharacteristicTypeIdentifierDateOfBirth", "未知")
     age = calc_age(bday) if bday != "未知" else None
-    print(f"生日: {bday}, 年龄: {age}, 最大心率: {max_hr}")
+    logging.info("生日: %s, 年龄: %s, 最大心率: %d", bday, age, max_hr)
 
     # ========== 构建各数据集 ==========
 
@@ -1431,14 +1424,14 @@ def main():
         save_csv(corr, out_dir, "sleep_steps_correlation.csv")
 
     # ========== 总结 ==========
-    print("\n" + "=" * 50)
-    print("全部完成! 输出文件:")
+    logging.info("=" * 50)
+    logging.info("全部完成! 输出文件:")
     total_size = 0
     for f in sorted(out_dir.glob("*.csv")):
         sz = f.stat().st_size
         total_size += sz
         # 已在 save_csv 中打印过
-    print(f"总计大小: {total_size / 1024:.1f} KB")
+    logging.info("总计大小: %.1f KB", total_size / 1024)
 
 
 if __name__ == "__main__":
